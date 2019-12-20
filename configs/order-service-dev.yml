@@ -1,3 +1,11 @@
 order:
   name: order-name
   id: 4
+server:
+  port: 9081
+spring:
+  cloud:
+    config:
+      override-none: true
+      allow-override: true
+      override-system-properties: false
