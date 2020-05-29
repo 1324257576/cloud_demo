@@ -1,0 +1,233 @@
+@SpringBootApplication注解分析
+
+@SpringBootConfiguration
+@EnableAutoConfiguration
+@ComponentScan(excludeFilters = { @Filter(type = FilterType.CUSTOM, classes = TypeExcludeFilter.class),
+		@Filter(type = FilterType.CUSTOM, classes = AutoConfigurationExcludeFilter.class) })
+public @interface SpringBootApplication {
+    //指定包含类
+	@AliasFor(annotation = EnableAutoConfiguration.class)
+	Class<?>[] exclude() default {};
+
+	//指定排除类
+	@AliasFor(annotation = EnableAutoConfiguration.class)
+	String[] excludeName() default {};
+
+    //ComponentScan扫描基本包下**/*.class
+	@AliasFor(annotation = ComponentScan.class, attribute = "basePackages")
+	String[] scanBasePackages() default {};
+
+	@AliasFor(annotation = ComponentScan.class, attribute = "basePackageClasses")
+	Class<?>[] scanBasePackageClasses() default {};
+
+	//是否对标记@Bean的方法进行代理，如果true，则调用@Bean的方法返回的Bean为同一个对象，详情见注解分析篇的@Configuration
+	@AliasFor(annotation = Configuration.class)
+	boolean proxyBeanMethods() default true;
+
+}
+
+1.@SpringBootConfiguration
+作用等同于@Configuration
+源码：
+@Configuration
+public @interface SpringBootConfiguration {
+
+	@AliasFor(annotation = Configuration.class)
+	boolean proxyBeanMethods() default true;
+
+}
+
+2.@ComponentScan
+默认扫描当前类的所在包下**/*.class带有@Component系列的注解的类为候选组件，详情见注解分析篇的@ComponentScan
+通过指定自定义过滤规则排除资源(实现TypeFilter接口)：TypeExcludeFilter/AutoConfigurationExcludeFilter
+TypeExcludeFilter指定规则:
+public boolean match(MetadataReader metadataReader, MetadataReaderFactory metadataReaderFactory)
+			throws IOException {
+    if (this.beanFactory instanceof ListableBeanFactory && getClass() == TypeExcludeFilter.class) {
+        for (TypeExcludeFilter delegate : getDelegates()) {
+            if (delegate.match(metadataReader, metadataReaderFactory)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+而默认情况下，getDelegates()返回null。
+private Collection<TypeExcludeFilter> getDelegates() {
+    Collection<TypeExcludeFilter> delegates = this.delegates;
+    if (delegates == null) {
+    //返回null
+        delegates = ((ListableBeanFactory) this.beanFactory).getBeansOfType(TypeExcludeFilter.class).values();
+        this.delegates = delegates;
+    }
+    return delegates;
+}
+
+AutoConfigurationExcludeFilter指定规则：
+@Override
+public boolean match(MetadataReader metadataReader, MetadataReaderFactory metadataReaderFactory)
+        throws IOException {
+        //&&关系
+    return isConfiguration(metadataReader) && isAutoConfiguration(metadataReader);
+}
+//是否包含@Configuration的直接注解或元注解
+private boolean isConfiguration(MetadataReader metadataReader) {
+    return metadataReader.getAnnotationMetadata().isAnnotated(Configuration.class.getName());
+}
+
+//从META-INF/spring.factories获取所有的自动配置类的类名集合中是否包含当前类名
+private boolean isAutoConfiguration(MetadataReader metadataReader) {
+    return getAutoConfigurations().contains(metadataReader.getClassMetadata().getClassName());
+}
+
+//从类路径META-INF/spring.factories获取所有的配置信息Map<String, List<String>>中以EnableAutoConfiguration.class全限定类名为key获取所有的自动配置类的类名
+protected List<String> getAutoConfigurations() {
+    if (this.autoConfigurations == null) {
+        this.autoConfigurations = SpringFactoriesLoader.loadFactoryNames(EnableAutoConfiguration.class,
+                this.beanClassLoader);
+    }
+    return this.autoConfigurations;
+}
+
+3.@EnableAutoConfiguration
+源码：
+@AutoConfigurationPackage
+@Import(AutoConfigurationImportSelector.class)
+public @interface EnableAutoConfiguration {
+
+    //自动配置的开关，可以通过env.getProperty(key)获取设置，默认true
+	String ENABLED_OVERRIDE_PROPERTY = "spring.boot.enableautoconfiguration";
+
+	Class<?>[] exclude() default {};
+	String[] excludeName() default {};
+}
+
+分析@AutoConfigurationPackage：
+获取该注解标记的所在类的包名作为自动配置的包名进行管理，保存在：AutoConfigurationPackages.BasePackages的List<String> packages属性中
+源码：
+@Import(AutoConfigurationPackages.Registrar.class)
+public @interface AutoConfigurationPackage {
+}
+通过@Import注解导入AutoConfigurationPackages.Registrar类
+static class Registrar implements ImportBeanDefinitionRegistrar, DeterminableImports {
+		@Override
+		public void registerBeanDefinitions(AnnotationMetadata metadata, BeanDefinitionRegistry registry) {
+		//new PackageImport(metadata).getPackageName():注解标记的当前类的包名
+			register(registry, new PackageImport(metadata).getPackageName());
+		}
+
+		@Override
+		public Set<Object> determineImports(AnnotationMetadata metadata) {
+			return Collections.singleton(new PackageImport(metadata));
+		}
+	}
+AutoConfigurationPackages#register
+public static void register(BeanDefinitionRegistry registry, String... packageNames) {
+        //BEAN是AutoConfigurationPackages.class.getName()
+
+		if (registry.containsBeanDefinition(BEAN)) {
+		////由于默认AutoConfigurationPackages没有实现类，因此不会进入这里
+			BeanDefinition beanDefinition = registry.getBeanDefinition(BEAN);
+			ConstructorArgumentValues constructorArguments = beanDefinition.getConstructorArgumentValues();
+			constructorArguments.addIndexedArgumentValue(0, addBasePackages(constructorArguments, packageNames));
+		}
+		else {
+		//注册一个AutoConfigurationPackages.BasePackages的GenericBeanDefinition
+			GenericBeanDefinition beanDefinition = new GenericBeanDefinition();
+			beanDefinition.setBeanClass(BasePackages.class);
+			beanDefinition.getConstructorArgumentValues().addIndexedArgumentValue(0, packageNames);
+			beanDefinition.setRole(BeanDefinition.ROLE_INFRASTRUCTURE);
+			registry.registerBeanDefinition(BEAN, beanDefinition);
+		}
+}
+
+分析@Import(AutoConfigurationImportSelector.class)：
+AutoConfigurationImportSelector实现ImportSelector接口：selectImports(AnnotationMetadata)获取META-INF/spring.factories中配置
+@Override
+public String[] selectImports(AnnotationMetadata annotationMetadata) {
+    // getEnvironment().getProperty(EnableAutoConfiguration.ENABLED_OVERRIDE_PROPERTY)检测是否开启自动配置的开关
+    if (!isEnabled(annotationMetadata)) {
+        return NO_IMPORTS;
+    }
+    //步骤1：
+    AutoConfigurationMetadata autoConfigurationMetadata = AutoConfigurationMetadataLoader
+            .loadMetadata(this.beanClassLoader);
+    //步骤2
+    AutoConfigurationEntry autoConfigurationEntry = getAutoConfigurationEntry(autoConfigurationMetadata,
+            annotationMetadata);
+    return StringUtils.toStringArray(autoConfigurationEntry.getConfigurations());
+}
+
+分析步骤1：AutoConfigurationMetadataLoader.loadMetadata(java.lang.ClassLoader):获取自动配置元信息的properties
+static AutoConfigurationMetadata loadMetadata(ClassLoader classLoader) {
+    //PATH = "META-INF/spring-autoconfigure-metadata.properties";
+    return loadMetadata(classLoader, PATH);
+}
+static AutoConfigurationMetadata loadMetadata(ClassLoader classLoader, String path) {
+    Enumeration<URL> urls = (classLoader != null) ? classLoader.getResources(path)
+            : ClassLoader.getSystemResources(path);
+    Properties properties = new Properties();
+    while (urls.hasMoreElements()) {
+        properties.putAll(PropertiesLoaderUtils.loadProperties(new UrlResource(urls.nextElement())));
+    }
+    return new PropertiesAutoConfigurationMetadata(properties);
+}
+
+分析步骤2：getAutoConfigurationEntry(autoConfigurationMetadata,annotationMetadata);
+protected AutoConfigurationEntry getAutoConfigurationEntry(AutoConfigurationMetadata autoConfigurationMetadata,
+        AnnotationMetadata annotationMetadata) {
+    //检测是否开启自动配置的开关
+    if (!isEnabled(annotationMetadata)) {
+        return EMPTY_ENTRY;
+    }
+    //获取@EnableAutoConfiguration的注解属性的值:exclude/excludeName
+    AnnotationAttributes attributes = getAttributes(annotationMetadata);
+    //获取META-INF/spring.factories中的自动配置类的类名
+    List<String> configurations = getCandidateConfigurations(annotationMetadata, attributes);
+    //去重
+    configurations = removeDuplicates(configurations);
+    //获取@SpringBootApplication注解中指定的exclude/excludeName的值
+    Set<String> exclusions = getExclusions(annotationMetadata, attributes);
+    checkExcludedClasses(configurations, exclusions);
+    configurations.removeAll(exclusions);
+    configurations = filter(configurations, autoConfigurationMetadata);
+    fireAutoConfigurationImportEvents(configurations, exclusions);
+    //排除掉注解中设置的exclude的类型后，返回
+    return new AutoConfigurationEntry(configurations, exclusions);
+}
+分析getCandidateConfigurations(annotationMetadata, attributes):
+
+List<String> configurations = SpringFactoriesLoader.loadFactoryNames(getSpringFactoriesLoaderFactoryClass(),getBeanClassLoader());
+
+public static List<String> loadFactoryNames(Class<?> factoryType, @Nullable ClassLoader classLoader) {
+        //factoryTypeName即EnableAutoConfiguration的全限定类名
+		String factoryTypeName = factoryType.getName();
+		return loadSpringFactories(classLoader).getOrDefault(factoryTypeName, Collections.emptyList());
+}
+
+private static Map<String, List<String>> loadSpringFactories(@Nullable ClassLoader classLoader) {
+    MultiValueMap<String, String> result = cache.get(classLoader);
+    if (result != null) {
+        return result;
+    }
+    //FACTORIES_RESOURCE_LOCATION = "META-INF/spring.factories"
+    Enumeration<URL> urls = (classLoader != null ?
+            classLoader.getResources(FACTORIES_RESOURCE_LOCATION) :
+            ClassLoader.getSystemResources(FACTORIES_RESOURCE_LOCATION));
+    result = new LinkedMultiValueMap<>();
+    while (urls.hasMoreElements()) {
+        URL url = urls.nextElement();
+        UrlResource resource = new UrlResource(url);
+        Properties properties = PropertiesLoaderUtils.loadProperties(resource);
+        for (Map.Entry<?, ?> entry : properties.entrySet()) {
+            String factoryTypeName = ((String) entry.getKey()).trim();
+            for (String factoryImplementationName : StringUtils.commaDelimitedListToStringArray((String) entry.getValue())) {
+                result.add(factoryTypeName, factoryImplementationName.trim());
+            }
+        }
+    }
+    cache.put(classLoader, result);
+    return result;
+}
+
+至此，分析完成。

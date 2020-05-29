@@ -1,0 +1,31 @@
+logback配置
+
+maven依赖：
+<dependency>
+    <groupId>org.slf4j</groupId>
+    <artifactId>slf4j-api</artifactId>
+    <version>1.7.29</version>
+</dependency>
+<dependency>
+    <groupId>ch.qos.logback</groupId>
+    <artifactId>logback-classic</artifactId>
+    <version>1.1.11</version>
+</dependency>
+
+依次读取以下类型配置文件：logback.groovy,logback-test.xml,logback.xml，
+如果以上文件都不存在则采用默认配置
+
+logback组件
+1.Logger：日志记录器，把它关联到应用对应的context上，主要用于存放日志对象，也可以定义日志类型、级别
+2.Appender：用于指定日志输出的目的地，目的地可以是控制台、文件、数据库等。
+3.Layout：将事件转换成字符串，格式化日志信息的输出。在logback中Layout对象被封装在encoder中。
+
+配置：见logback.xml
+
+
+
+SpringBoot日志框架
+默认日志框架：日志门面SLF4j，日志实现logback
+使用：
+Logger logger = LoggerFactory.getLogger(getClass());
+logger.info();

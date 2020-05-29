@@ -1,0 +1,15 @@
+
+类型实参：?
+类型通配符上限：? extend Clazz  例如 ArrayList#addAll(Collection<? extends E> c)
+类型通配符下限： ? super Clazz 例如 TreeSet#TreeSet(Comparator<? super E> comparator)
+
+
+
+泛型数组
+T[] arr;
+//无法通过arr = new T[length]创建，可以通过Array.newInstance(Class<?> componentType, int length)进行创建
+
+
+类型擦除
+List<?> -> List<Object>
+List<? extend Number> -> List<Number>

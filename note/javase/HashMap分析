@@ -1,0 +1,98 @@
+
+懒初始化的方式，当进行putVal的时候才去初始化数组。
+
+hash值与右移16位后的值进行与运算，将高位的数据参与hash运算
+static final int hash(Object key) {
+    int h;
+    return (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
+}
+
+
+通过右移位以及与运算，使得cap-1的最高位1后面的值全变成1，最后+1，返回2的幂次值。
+static final int tableSizeFor(int cap) {
+    int n = cap - 1;
+    n |= n >>> 1;
+    n |= n >>> 2;
+    n |= n >>> 4;
+    n |= n >>> 8;
+    n |= n >>> 16;
+    return (n < 0) ? 1 : (n >= MAXIMUM_CAPACITY) ? MAXIMUM_CAPACITY : n + 1;
+}
+
+
+java.util.HashMap.resize():
+1.如果Node<K,V>[] oldTab为null，赋值cap=默认容量16，threshold=cap*load_factor=12,
+如果不为null，则将cap <<=1,threshold=cap*load_factor.
+2.创建新的Node[cap]
+3.如果oldTab不为null，将数据复制到newTab中。
+由于index是通过hashcode的低位数据得知的，而table扩容后，长度len<<1，则index由hashcode的低位数据得知（由于len*2，因此决定index的低位数据的位数也+1）.
+因此，index可能是原来的index，也可能是原来的index加上oldCap的长度的和。（由hashcode的低位的新+1的最高位是否为0决定，算法：e.hash & oldCap）
+在原来tab[index]的链表中的node，由hashcode的新高位是否为0/1分成了两个新的链表，而这两个链表在newTab中的下标则是index，和index+oldCap。
+
+
+
+可以由resize扩容后的链表数据复制的源码分析得知：（由于使用的是尾插法，因此将链表分为高低位两个新的链表后，顺序保持不变）
+Node<K,V> loHead = null, loTail = null;
+Node<K,V> hiHead = null, hiTail = null;
+Node<K,V> next;
+do {
+    next = e.next;
+    if ((e.hash & oldCap) == 0) {
+        if (loTail == null)
+            loHead = e;
+        else
+            loTail.next = e;
+        loTail = e;
+    }
+    else {
+        if (hiTail == null)
+            hiHead = e;
+        else
+            hiTail.next = e;
+        hiTail = e;
+    }
+} while ((e = next) != null);
+if (loTail != null) {
+    loTail.next = null;
+    newTab[j] = loHead;
+}
+if (hiTail != null) {
+    hiTail.next = null;
+    newTab[j + oldCap] = hiHead;
+}
+
+
+
+
+
+i = (n - 1) & hash
+计算下标的方式：使用tab的长度len进行减1的结果与hash值进行与运算，得到0~(len-1)的下标值。下标值取决于hash的低位数值。
+
+putVal：
+通过(table.length-1) & hash计算下标。如果table[index]为空则将newNode(hash, key, value, null)保存在该位置。
+如果不为null，则判断该位置的node是否key值相同：如果是则直接替换value，并返回oldValue，否则根据是否为链表或红黑树结构进行查找，
+如果不存在对应key的node，则存储新node
+（如果是链表的话再存储后，还会考虑是否进行树化：如果链表长度达到TREEIFY_THRESHOLD，则进行以下判断：table.len达到MIN_TREEIFY_CAPACITY则进行树化，否则进行扩容）
+，否则对对应的node的value进行修改，并返回oldValue
+此时方法还没return即此次操作是新增node，需要modCount++，size++。如果大于扩容阈值还需要进行扩容操作。
+
+
+需要注意的是：1.8的hashmap对链表的node新增的做法是尾插法：p.next = newNode(hash, key, value, null);
+而1.7的做法是头插法:table[i]=new Entry(key,value,table[i]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

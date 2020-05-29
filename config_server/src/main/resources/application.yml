@@ -1,0 +1,23 @@
+server:
+  port: 8666
+
+spring:
+  application:
+    name: config-server
+
+  #order-service-dev.yml
+  cloud:
+    config:
+      server:
+        git:
+          uri: https://github.com/1324257576/cloud_demo
+          search-paths: configs
+
+
+eureka:
+  instance:
+    prefer-ip-address: true
+    instance-id: config-server:8666
+  client:
+    serviceUrl:
+      defaultZone: http://${eureka.host:localhost}:${eureka.port:8761}/eureka/

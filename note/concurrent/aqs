@@ -1,0 +1,690 @@
+Lock的使用
+Lock lock = ...;
+lock.lock();
+try{
+	
+}finally{
+	lock.unlock();
+}
+或者
+if (lock.tryLock()){
+	try{
+
+	}finally{
+		lock.unlock();
+	}
+}
+
+ReentrantLock源码分析
+
+成员变量：
+Sync sync;
+构造方法：
+ReentrantLock(){
+	sync = new NonfairSync();
+}
+ReentrantLock(boolean fair){
+	sync = fair? new FairSync() : new NonfairSync();
+}
+
+NonfairSync的lock()：
+A的分析：
+final void lock() {
+	//cas更新state
+    if (compareAndSetState(0, 1))
+    	//设置exclusiveOwnerThread为当前线程
+        setExclusiveOwnerThread(Thread.currentThread());
+    else
+    	//进入A1
+        acquire(1);
+}
+
+A1的分析：
+public final void acquire(int arg) {
+	//tryAcquire(arg) A1-1
+	//如果A1返回false，即线程进行CAS抢不到同步状态，也不是锁重入，则保存
+	//addWaiter(Node.EXCLUSIVE) A1-2 将Node添加到队尾
+	//acquireQueued(Node,arg) A1-3
+    if (!tryAcquire(arg) &&
+        acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
+        //A1-4
+        selfInterrupt();
+}
+
+A1-1的分析：
+final boolean nonfairTryAcquire(int acquires) {
+    final Thread current = Thread.currentThread();
+    int c = getState();
+    //如果exclusiveOwnerThread已经释放同步状态，进行cas抢占
+    if (c == 0) {
+    	//非公平锁，只是cas抢占state，而不去进行hasQueuedPredecessors判断队列是否有head.next的Node
+        if (compareAndSetState(0, acquires)) {
+            setExclusiveOwnerThread(current);
+            return true;
+        }
+    }
+    //如果exclusiveOwnerThread是当前线程，则锁重入，state+arg
+    else if (current == getExclusiveOwnerThread()) {
+        int nextc = c + acquires;
+        if (nextc < 0) // overflow
+            throw new Error("Maximum lock count exceeded");
+        setState(nextc);
+        return true;
+    }
+    return false;
+}
+
+
+A1-2的分析：
+private Node addWaiter(Node mode) {
+
+    Node node = new Node(Thread.currentThread(), mode);
+    // Try the fast path of enq; backup to full enq on failure
+    Node pred = tail;
+
+    //如果tail不为空则尝试cas将Node添加到末尾，如果失败则进行enq(node)进行自旋cas添加到末尾
+    if (pred != null) {
+        node.prev = pred;
+        if (compareAndSetTail(pred, node)) {
+            pred.next = node;
+            return node;
+        }
+    }
+    //A1-2-1
+    enq(node);
+    return node;
+}
+
+A1-2-1的分析：
+private Node enq(final Node node) {
+    for (;;) {
+        Node t = tail;
+        //如果FIFO队列未初始化进行初始化，初始化后，进行循环cas添加到末尾
+        if (t == null) { 
+            if (compareAndSetHead(new Node()))
+                tail = head;
+        } else {
+            node.prev = t;
+            if (compareAndSetTail(t, node)) {
+                t.next = node;
+                return t;
+            }
+        }
+    }
+}
+
+A1-3的分析：
+final boolean acquireQueued(final Node node, int arg) {
+    boolean failed = true;
+    try {
+        boolean interrupted = false;
+        for (;;) {
+            final Node p = node.predecessor();
+            //如果node的前驱节点为head，则进行A1-1，如果抢占到同步状态，则设置当前node为head,并返回interrupted打断标记
+            if (p == head && tryAcquire(arg)) {
+                setHead(node);
+                p.next = null; // help GC
+                failed = false;
+                return interrupted;
+            }
+            //shouldParkAfterFailedAcquire A1-3-1 //将node的前驱ode的waitStatus设置为SIGNAL(-1)
+            //parkAndCheckInterrupt A1-3-2 //park当前线程
+            if (shouldParkAfterFailedAcquire(p, node) &&
+                parkAndCheckInterrupt())
+                //如果线程被unpark
+                //赋值该线程的打断标记
+                interrupted = true;
+        }
+    } finally {
+        if (failed)
+            cancelAcquire(node);
+    }
+}
+
+A1-3-1：
+private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
+    int ws = pred.waitStatus;
+    if (ws == Node.SIGNAL)
+        return true;
+    if (ws > 0) {
+        do {
+            node.prev = pred = pred.prev;
+        } while (pred.waitStatus > 0);
+        pred.next = node;
+    } else {
+        compareAndSetWaitStatus(pred, ws, Node.SIGNAL);
+    }
+    return false;
+}
+
+A1-3-2:
+private final boolean parkAndCheckInterrupt() {
+
+}
+    LockSupport.park(this);
+    
+    //等待unpark，返回false
+    //如果线程被interrupt(),则返回打断标记true并清空打断标记
+    //返回后经过循环，需要进行if (p == head && tryAcquire(arg)) 判断，如果为false，则会重新被park阻塞住
+    //如果为true则，进入A1-4，此处selfInterrupt不会有任何作用
+    return Thread.interrupted();
+}
+
+static void selfInterrupt() {
+    Thread.currentThread().interrupt();
+}
+
+
+
+NonfairSync的unlock()：
+B的分析：
+public void unlock() {
+	//B1的分析：
+    sync.release(1);
+}
+
+//B1
+public final boolean release(int arg) {
+	// tryRelease B1-1
+    if (tryRelease(arg)) {
+        Node h = head;
+        //如果head后面有Node，则head的waitStatus为-1
+        if (h != null && h.waitStatus != 0)
+        	//unpark head后续的第一个waitState<=0的node的线程 B1-2
+        	//从acquireQueued方法的parkAndCheckInterrupt的方法中park处继续执行（A1-3的分析）
+            unparkSuccessor(h);
+        return true;
+    }
+    return false;
+}
+
+B1-1
+protected final boolean tryRelease(int releases) {
+	//锁重入的解锁，每次state-arg，当state==0才表示exclusiveOwnerThread为null
+    int c = getState() - releases;
+    if (Thread.currentThread() != getExclusiveOwnerThread())
+        throw new IllegalMonitorStateException();
+    boolean free = false;
+    if (c == 0) {
+        free = true;
+        setExclusiveOwnerThread(null);
+    }
+    setState(c);
+    return free;
+}
+
+
+
+B1-2
+private void unparkSuccessor(Node node) {
+    int ws = node.waitStatus;
+    if (ws < 0)
+        compareAndSetWaitStatus(node, ws, 0);
+
+    
+    Node s = node.next;
+    //Node的waitStatus默认值=0
+    if (s == null || s.waitStatus > 0) {
+        s = null;
+        //从队尾向前查询处于head后面的第一个需要唤醒线程的node
+        for (Node t = tail; t != null && t != node; t = t.prev)
+            if (t.waitStatus <= 0)
+                s = t;
+    }
+    if (s != null)
+        LockSupport.unpark(s.thread);
+}
+
+
+A1-3的分析：（unpark后的逻辑）
+final boolean acquireQueued(final Node node, int arg) {
+    boolean failed = true;
+    try {
+        boolean interrupted = false;
+        for (;;) {
+            final Node p = node.predecessor();
+            //此时node的前驱节点为head，进行同步状态的抢占，由于非公平锁实现，此处如果被其他线程抢占，则当前node经过循环又重新进行park
+            //否则，抢占到同步状态，将head节点移除，并设置当前node为head
+            if (p == head && tryAcquire(arg)) {
+                setHead(node);
+                p.next = null; // help GC
+                failed = false;
+                return interrupted;
+            }
+            //shouldParkAfterFailedAcquire A1-3-1 //将node的前驱ode的waitStatus设置为SIGNAL(-1)
+            
+            //parkAndCheckInterrupt 此时线程被unpark
+            if (shouldParkAfterFailedAcquire(p, node) &&
+                parkAndCheckInterrupt())
+                
+                
+                interrupted = true;
+        }
+    } finally {
+        if (failed)
+            cancelAcquire(node);
+    }
+}
+
+
+lockInterruptibly的分析：
+C：
+public void lockInterruptibly() throws InterruptedException {
+	//C1
+    sync.acquireInterruptibly(1);
+}
+
+C1
+public final void acquireInterruptibly(int arg)
+        throws InterruptedException {
+    if (Thread.interrupted())
+        throw new InterruptedException();
+       //tryAcquire同上文
+    if (!tryAcquire(arg))
+    	//doAcquireInterruptibly C2
+        doAcquireInterruptibly(arg);
+}
+
+
+C2
+private void doAcquireInterruptibly(int arg)
+    throws InterruptedException {
+    final Node node = addWaiter(Node.EXCLUSIVE);
+    boolean failed = true;
+    try {
+        for (;;) {
+            final Node p = node.predecessor();
+            if (p == head && tryAcquire(arg)) {
+                setHead(node);
+                p.next = null; // help GC
+                failed = false;
+                return;
+            }
+            if (shouldParkAfterFailedAcquire(p, node) &&
+                parkAndCheckInterrupt())
+                //如果park线程因interrupt而唤醒，则返回打断标记true，则抛出InterruptedException,并进入finally
+                throw new InterruptedException();
+        }
+    } finally {
+        if (failed)
+        	//C2-1 待分析
+            cancelAcquire(node);
+    }
+}
+
+C2-1
+private void cancelAcquire(Node node) {
+    if (node == null)
+        return;
+
+    node.thread = null;
+
+    // 获取waitStatus!=CANNEL的最近的前驱节点，赋值给pred
+    Node pred = node.prev;
+    while (pred.waitStatus > 0)
+        node.prev = pred = pred.prev;
+
+    Node predNext = pred.next;
+
+    node.waitStatus = Node.CANCELLED;
+
+	//如果当前node是队尾，将node.pred设置为tail
+    if (node == tail && compareAndSetTail(node, pred)) {
+    	//并将tail的next设置为null
+        compareAndSetNext(pred, predNext, null);
+    } else {
+      
+        int ws;
+        //如果当前node不是head，并且前驱节点pre的waitStatus为SIGNAL ，如果pre的waitStatus不为SIGNAL，则设置为SIGNAL
+        if (pred != head &&
+            ((ws = pred.waitStatus) == Node.SIGNAL ||
+             (ws <= 0 && compareAndSetWaitStatus(pred, ws, Node.SIGNAL))) &&
+            pred.thread != null) {
+            Node next = node.next;
+            //将当前node从队列中移除
+            if (next != null && next.waitStatus <= 0)
+                compareAndSetNext(pred, predNext, next);
+        } else {
+        	//如果是head或者是哨兵head的next，则B1-2 ，唤醒该node后面的第一个需要被唤醒的node的线程
+            unparkSuccessor(node);
+        }
+
+        node.next = node; // help GC
+    }
+}
+
+
+
+FairSync的tryAcquire
+D：
+protected final boolean tryAcquire(int acquires) {
+    final Thread current = Thread.currentThread();
+    int c = getState();
+    if (c == 0) {
+    //hasQueuedPredecessors D1
+    //如果队列中没有前驱节点，才进行CAS设置state
+        if (!hasQueuedPredecessors() &&
+            compareAndSetState(0, acquires)) {
+            setExclusiveOwnerThread(current);
+            return true;
+        }
+    }
+    else if (current == getExclusiveOwnerThread()) {
+        int nextc = c + acquires;
+        if (nextc < 0)
+            throw new Error("Maximum lock count exceeded");
+        setState(nextc);
+        return true;
+    }
+    return false;
+}
+
+
+D1
+public final boolean hasQueuedPredecessors() {
+    Node t = tail; 
+    Node h = head;
+    Node s;
+    //队列中有节点
+    return h != t &&
+    //当前head节点不是哨兵节点 || //head.next.thread阻塞中
+        ((s = h.next) == null || s.thread != Thread.currentThread());
+}
+
+tryLock(long,TimeUnit)的分析：
+E：
+public boolean tryLock(long timeout, TimeUnit unit)
+        throws InterruptedException {
+        	//E1
+    return sync.tryAcquireNanos(1, unit.toNanos(timeout));
+}
+
+//E1
+public final boolean tryAcquireNanos(int arg, long nanosTimeout)
+        throws InterruptedException {
+    if (Thread.interrupted())
+        throw new InterruptedException();
+    return tryAcquire(arg) ||
+    //E1-1
+        doAcquireNanos(arg, nanosTimeout);
+}
+
+E1-1
+private boolean doAcquireNanos(int arg, long nanosTimeout)
+        throws InterruptedException {
+    if (nanosTimeout <= 0L)
+        return false;
+    final long deadline = System.nanoTime() + nanosTimeout;
+    final Node node = addWaiter(Node.EXCLUSIVE);
+    boolean failed = true;
+    try {
+        for (;;) {
+            final Node p = node.predecessor();
+            if (p == head && tryAcquire(arg)) {
+                setHead(node);
+                p.next = null; // help GC
+                failed = false;
+                return true;
+            }
+            //每次都重新计算parkNanos的时间
+            nanosTimeout = deadline - System.nanoTime();
+            if (nanosTimeout <= 0L)
+            //超时时返回
+                return false;
+            if (shouldParkAfterFailedAcquire(p, node) &&
+                nanosTimeout > spinForTimeoutThreshold)
+                LockSupport.parkNanos(this, nanosTimeout);
+            if (Thread.interrupted())
+            //tryLock(long,TimeUnit)可被打断
+                throw new InterruptedException();
+        }
+    } finally {
+        if (failed)
+            cancelAcquire(node);
+    }
+}
+
+
+newCondition()的分析：
+F
+final ConditionObject newCondition() {
+    return new ConditionObject();
+}
+
+ConditionObject实现了Condition接口，有Node firstWaiter和Node lastWaiter两个成员变量，用于维护FIFO队列
+
+java.util.concurrent.locks.AbstractQueuedSynchronizer.ConditionObject#await()
+G
+public final void await() throws InterruptedException {
+    if (Thread.interrupted())
+        throw new InterruptedException();
+        //G1： 移除队列中的非CONDITION的node，添加当前线程node到CONDITION队列中
+    Node node = addConditionWaiter();
+    //G2 
+    int savedState = fullyRelease(node);
+    int interruptMode = 0;
+    //判断该节点是否在SIGNAL队列中， 加这个判断的原因是：
+    //当其他线程调用signal/signalAll会把当前node添加到SIGNAL队列的队尾，当当前线程被unpark后检查isOnSyncQueue后跳出循环
+    while (!isOnSyncQueue(node)) {
+    //阻塞当前线程
+        LockSupport.park(this);
+        if ((interruptMode = checkInterruptWhileWaiting(node)) != 0)
+            break;
+    }
+    //使用savedState重新竞争同步状态，以恢复以前重入锁后的state
+    if (acquireQueued(node, savedState) && interruptMode != THROW_IE)
+        interruptMode = REINTERRUPT;
+    if (node.nextWaiter != null) // clean up if cancelled
+        unlinkCancelledWaiters();
+    if (interruptMode != 0)
+        reportInterruptAfterWait(interruptMode);
+}
+
+G1
+private Node addConditionWaiter() {
+    Node t = lastWaiter;
+    // If lastWaiter is cancelled, clean out.
+    if (t != null && t.waitStatus != Node.CONDITION) {
+    //遍历队列，移除所有的非CONDITION的node
+        unlinkCancelledWaiters();
+        t = lastWaiter;
+    }
+    //添加到当前线程的node，waitStatus=Node.CONDITION
+    Node node = new Node(Thread.currentThread(), Node.CONDITION);
+    if (t == null)
+        firstWaiter = node;
+    else
+        t.nextWaiter = node;
+    lastWaiter = node;
+    return node;
+}
+
+G2 
+final int fullyRelease(Node node) {
+    boolean failed = true;
+    try {
+    	//获取当前state，当前线程可能锁重入，
+        int savedState = getState();
+        if (release(savedState)) {
+            failed = false;
+            return savedState;
+        } else {
+            throw new IllegalMonitorStateException();
+        }
+    } finally {
+        if (failed)
+            node.waitStatus = Node.CANCELLED;
+    }
+}
+
+
+H
+public final void signal() {
+    if (!isHeldExclusively())
+        throw new IllegalMonitorStateException();
+    Node first = firstWaiter;
+    if (first != null)
+    //H1
+        doSignal(first);
+}
+
+H1
+private void doSignal(Node first) {
+    do {
+        if ( (firstWaiter = first.nextWaiter) == null)
+            lastWaiter = null;
+        first.nextWaiter = null;
+        //H1-1 由于transferForSignal返回true而只是对firstWaiter的线程进行signal
+    } while (!transferForSignal(first) &&
+             (first = firstWaiter) != null);
+}
+
+//对比doSignalAll
+private void doSignalAll(Node first) {
+    lastWaiter = firstWaiter = null;
+    do {
+        Node next = first.nextWaiter;
+        first.nextWaiter = null;
+        transferForSignal(first);
+        first = next;
+    } while (first != null);
+}
+
+H1-1
+final boolean transferForSignal(Node node) {
+   
+    if (!compareAndSetWaitStatus(node, Node.CONDITION, 0))
+        return false;
+    //将node入阻塞队列
+    Node p = enq(node);
+    //ws=0
+    int ws = p.waitStatus;
+    if (ws > 0 || !compareAndSetWaitStatus(p, ws, Node.SIGNAL))
+    //唤醒因await()而WAIT的线程
+        LockSupport.unpark(node.thread);
+    return true;
+}	
+
+
+以上分析了ReentrantLock的主要方法以及Condition的主要方法的的源码流程，后续再补充ReentrantReadWriteLock的分析
+
+
+
+
+
+
+ReentrantLock实现了Lock接口
+
+Lock接口方法：
+-void lock();
+-void unlock();
+-void lockInterruptibly() throw InterruptedException;
+-boolean tryLock();
+-boolean tryLock(long,TimeUnit) throw InterruptedException;
+//获取与当前锁绑定的等待通知组件
+-Condition newCondition();
+
+AQS是用来构建锁或者其他同步组件的基础框架，主要的成员变量有：(加上volatile，使用CAS更新)
+//表示同步状态 0/1，对同步状态的获取设置的方法：getState()/setState(int)/compareAndSetState(int,int)
+-volatile int state;
+//FIFO队列，双向链表 
+-volatile Node head;
+-volatile Node tail;
+
+AQS：Node head Node tail :同步队列
+ConditionObject：Node firstWaiter-Node lastWaiter ：等待队列
+
+同步器可重写的方法
+//独占式获取同步状态
+-boolean tryAcquire(int)
+//独占式释放同步状态
+-boolean tryAcquire(int)
+//共享式获取同步状态
+-boolean tryAcquire(int)
+//共享式释放同步状态
+-boolean tryAcquire(int)
+//是否同步器在独占模式被当前线程占用
+-boolean isHeldExclusively()
+
+ReentrantReadWriteLock
+
+ReentrantReadWriteLock rw = new ReentrantReadWriteLock();
+ReentrantReadWriteLock.ReadLock rL = rw.readLock();
+ReentrantReadWriteLock.WriteLock wL = rw.writeLock();
+
+注意：
+不支持锁重入的锁升级：获取readLock之后，需要对rL解锁后，才能获取writeLock。
+支持锁重入的锁降级：获取writeLock之后，可以再获取readLock，再释放wL，最后再释放rL。分析：如果线程A对修改数据的操作而加上写锁，当前线程需要进行读取数据，则需要在写锁释放前加上读锁。否则，
+如果此时有另外的线程B加上写锁进行数据更新，则由于线程A和线程B并发而可能造成线程A获取不到线程B更新后的数据。因此，线程A加上读锁降级时，线程B无法更新数据而不会造成数据不一致。
+由源码可知ReadLock不支持newCondition()
+
+ReentrantReadWriteLock 对int state变量的高16位作为读锁的占用计数，低16位作为写锁的占用计数。
+
+WriteLock.lock
+WriteLock的tryAcquire，写锁使用state的低16位
+protected final boolean tryAcquire(int acquires) {
+ 
+    Thread current = Thread.currentThread();
+    
+    int c = getState();
+    //获取写锁的count
+    int w = exclusiveCount(c);
+    if (c != 0) {
+    		//如果c!=0，可能是一个或多个线程加上读锁，可能是一个线程加上写锁
+    		//w==0 表示加的是读锁
+        if (w == 0 || current != getExclusiveOwnerThread())
+            return false;
+        if (w + exclusiveCount(acquires) > MAX_COUNT)
+            throw new Error("Maximum lock count exceeded");
+       	//写锁的重入
+        setState(c + acquires);
+        return true;
+    }
+    //writerShouldBlock(): 非公平则返回false，公平则检查hasQueuedPredecessors()
+    if (writerShouldBlock() ||
+        !compareAndSetState(c, c + acquires))
+        return false;
+    setExclusiveOwnerThread(current);
+    return true;
+}
+
+
+ReadLock.lock
+
+public void lock() {
+    sync.acquireShared(1);
+}
+
+public final void acquireShared(int arg) {
+    if (tryAcquireShared(arg) < 0)
+        doAcquireShared(arg);
+}
+
+protected final int tryAcquireShared(int unused) {
+    Thread current = Thread.currentThread();
+    int c = getState();
+    //如果当前加的是写锁，进一步检查当前线程是否为ExclusiveOwnerThread，(锁降级)
+    if (exclusiveCount(c) != 0 &&
+        getExclusiveOwnerThread() != current)
+        return -1;
+    int r = sharedCount(c);
+    if (!readerShouldBlock() &&
+        r < MAX_COUNT &&
+        compareAndSetState(c, c + SHARED_UNIT)) {
+        if (r == 0) {
+            firstReader = current;
+            firstReaderHoldCount = 1;
+        } else if (firstReader == current) {
+            firstReaderHoldCount++;
+        } else {
+            HoldCounter rh = cachedHoldCounter;
+            if (rh == null || rh.tid != getThreadId(current))
+                cachedHoldCounter = rh = readHolds.get();
+            else if (rh.count == 0)
+                readHolds.set(rh);
+            rh.count++;
+        }
+        return 1;
+    }
+    return fullTryAcquireShared(current);
+}

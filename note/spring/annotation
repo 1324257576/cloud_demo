@@ -1,0 +1,166 @@
+常用注解分析：
+1.@Configuration
+表明当前类是Spring的配置类，用于替代xml文件配置，本质上是@Component注解，
+被此注解修饰的配置类，也会被存入spring的ioc容器中。
+源码：
+@Component
+public @interface Configuration {
+    @AliasFor(annotation = Component.class)
+    String value() default "";  //指定存入spring的ioc容器中bean的id。
+
+    boolean proxyBeanMethods() default true; //是否代理标记了@Bean注解的方法,默认为true
+}
+当proxyBeanMethods指定为true时，在调用标记@Bean的方法时，会被代理增强，此时返回容器中已有的Bean对象。
+否则，不被代理增强，此时返回一个新的Bean对象。
+如果proxyBeanMethods指定为false时，在配置类使用的@Configuration作用等同于@Component。
+测试见：ConfigurationConfig。
+2.@Component/@Repository/@Service/@Controller
+@Indexed   //添加索引，以提高应用启动性能。
+public @interface Component {
+	String value() default "";
+}
+
+3.@ComponentScan
+用于指定创建容器时要扫描的包。
+源码：
+@Repeatable(ComponentScans.class) //可重复注解
+public @interface ComponentScan {
+
+
+	@AliasFor("basePackages") //指定扫描包，spring将扫描指定的包及其子包下所有的类
+	String[] value() default {};
+
+	@AliasFor("value")
+	String[] basePackages() default {};
+
+
+	Class<?>[] basePackageClasses() default {}; //扫描具体class字节码
+
+	//默认值：AnnotationBeanNameGenerator,获取@Component系列注解的value，value为空时，使用类的简单类名进行首字母小写。
+	Class<? extends BeanNameGenerator> nameGenerator() default BeanNameGenerator.class;
+
+	//解析Bean的scope
+	Class<? extends ScopeMetadataResolver> scopeResolver() default AnnotationScopeMetadataResolver.class;
+
+	//指定生成Bean的代理方式，DEFAULT=NO：无进行代理，INTERFACES：JDK，TARGET_CLASS：CGLIB
+	ScopedProxyMode scopedProxy() default ScopedProxyMode.DEFAULT;
+
+	//扫描包下资源的规则,默认值：**/*.class
+	String resourcePattern() default ClassPathScanningCandidateComponentProvider.DEFAULT_RESOURCE_PATTERN;
+
+	//是否检测@Component系列注解的类
+	boolean useDefaultFilters() default true;
+
+	//指定包含和排除的过滤规则,由Filter[]构成
+	Filter[] includeFilters() default {};
+	Filter[] excludeFilters() default {};
+
+    //Bean是否进行懒加载
+	boolean lazyInit() default false;
+
+
+	@interface Filter {
+
+	    //ANNOTATION注解,ASSIGNABLE_TYPE指定具体类型,其他见FilterType
+		FilterType type() default FilterType.ANNOTATION;
+
+        //指定FilterType对应类型的类，例如FilterType=FilterType.ANNOTATION，value={Controller.class}的作用等同于@Controller
+		@AliasFor("classes")
+		Class<?>[] value() default {};
+
+		@AliasFor("value")
+		Class<?>[] classes() default {};
+
+		String[] pattern() default {};
+	}
+
+}
+4.@Bean
+作用：将当前方法的返回值存入spring的ioc容器
+public @interface Bean {
+
+    //bean的ioc容器的id标识，可以有多个
+	@AliasFor("name")
+	String[] value() default {};
+	@AliasFor("value")
+	String[] name() default {};
+
+    //指定自动装配的方式
+	@Deprecated
+	Autowire autowire() default Autowire.NO;
+
+    //指定是否按照类型自动注入到其他Bean中，只影响@Autowired，如果为false，其他Bean注入当前类型的Bean时，当前Bean不会成为自动装配的候选者
+	boolean autowireCandidate() default true;
+
+	//指定初始化方法
+	String initMethod() default "";
+
+	//指定销毁方法
+	String destroyMethod() default AbstractBeanDefinition.INFER_METHOD;
+
+}
+
+5.@Import
+作用：引入配置类，被引入的类可以不添加@Configuration/@Component
+public @interface Import {
+
+	/**
+	 * {@link Configuration @Configuration}, {@link ImportSelector},
+	 * {@link ImportBeanDefinitionRegistrar}, or regular component classes to import.
+	 */
+	Class<?>[] value();
+}
+
+6.@PropertySource
+作用：用于指定资源文件的位置。可以通过PropertySourceFactory读取任意文件
+@Repeatable(PropertySources.class)
+public @interface PropertySource {
+
+	 //指定资源的名称，如果没有指定，将根据底层资源的描述进行生成
+	String name() default "";
+
+	//指定资源的路径，classpath: file:
+	String[] value();
+
+
+	boolean ignoreResourceNotFound() default false;
+
+	String encoding() default "";
+
+	//读取资源的工厂类，DefaultPropertySourceFactory可以读取xml或properties文件
+	Class<? extends PropertySourceFactory> factory() default PropertySourceFactory.class;
+}
+
+
+
+7.@DependsOn
+作用：指定当前类的Bean生成顺序依赖于ioc中id为指定value的Bean对象，在它们之后创建。
+public @interface DependsOn {
+
+    //指定的bean会在当前bean创建之前创建
+	String[] value() default {};
+}
+8.@Lazy
+作用：指定单例Bean对象的创建时机，单例Bean的创建时机是在第一次使用时创建。
+此注解只对@Scope为单例的Bean起作用。
+public @interface Lazy {
+	boolean value() default true;
+}
+
+9.@Conditional
+扩展注解：@ConditionalOnXXX
+public @interface Conditional {
+	//提供实现Condition接口的类
+	//在进行注入Bean对象前会根据matches(ConditionContext, AnnotatedTypeMetadata)方法返回值决定是否注入
+	//ConditionContext:上下文信息，AnnotatedTypeMetadata：当前方法的注解元信息
+	Class<? extends Condition>[] value();
+}
+
+10.@Autowired
+可以在构造方法,set方法，字段，config方法处使用
+public @interface Autowired {
+
+    //自动装配的bean对象是否必需存在
+	boolean required() default true;
+
+}

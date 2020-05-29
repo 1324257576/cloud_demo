@@ -1,0 +1,21 @@
+
+String
+StringTable k：str字面值，v：对应的对象引用
+
+字面值/加final的String常量 一旦使用到便在StringTable查找，如果没有则增加对应的Entry
+final String a="a";
+String b = "b"+a;
+String c = "b"+"a";  //b或c 经编译器优化后直接成为 "ba"
+
+而不加final的String变量：
+String x = "x";
+String y = "y"+x; //等价于new StringBuilder().append("y").append(x).toString()
+
+intern()方法
+当String str = “abc”，调用String value = str.intern()方法时，
+首先查看StringTable中是否有k为"abc"的Entry，如果有则返回对应的v。
+jdk1.6：如果没有，则将str的引用进行复制(str2)，并将“str”作为k，复制的引用(str2)作为v的Entry存储到StringTable，并返回str2
+jdk1.6以后：如果没有，则将“abc“为k，str的引用作为v的Entry存储到StringTable，并返回str。
+
+StringTable的内存位置：jdk1.8之前：PermGen space，1.7：Java Heap，1.8：MetaSpace。 原因：youngGc更加容易触发并且回收效率更快
+

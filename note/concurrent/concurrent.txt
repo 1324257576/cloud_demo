@@ -1,0 +1,265 @@
+多线程知识点回顾
+
+并发并行：
+并发：concurrent多个线程轮流使用一个CPU，不同的同步代码块在同一个CPU调度下交替完成
+并行：parallel 多CPU，不同的同步代码块在多个CPU的调度下同时地交替进行
+单核CPU：微观串行，宏观并行
+Thread/Runnable
+ //为Thread指定线程名称
+new Thread(() -> log.info(Thread.currentThread().getName()), "logThread").start();
+start()->start0() native方法：创建新的线程
+run() -> Runnable.run()和普通方法没区别
+FutureTask<V>/Callable,再使用Thread开启线程执行
+FutureTask<V>继承RunnableFuture<V>接口 -Runnable/Future<V>
+
+win查看进程/关闭进程
+tasklist | findstr key
+taskkill -F -PID pid
+查看端口
+netstat -ano
+linux查看进程/关闭进程
+ps -ef | grep key
+kill -9 pid
+netstat -tunlp
+
+
+线程上下文切换 thread context switch
+可能原因：线程的CPU时间片用完/垃圾回收/有高优先级的线程需要运行/线程调用了sleep、yield、wait、join、park、synchronized、lock等方法
+
+
+ClassName.methodName : static方法 ，ClassName#methodName：普通方法
+
+
+Thread#join(long millis)
+public final synchronized void join(long millis)
+查看源码可知，在join(#)的方法上指定了synchronized关键字，调用threadB.join(millis)的线程threadA获得了threadB这个对象锁，
+而在join(millis)的代码中，这个threadA线程会被wait(millis)，如果millis=0,则是wait(),直到threadB的线程运行结束(thread.cpp)才notifyAll唤醒等待线程锁的线程，意味着调用threadB.join(#)的threadA将会被唤醒。
+可以得知，join的作用是阻塞调用t.join(#)的当前线程，直至t运行结束或者等待join的millis超时。作用有点类型于Future的功能。
+
+Thread#getState() 在java.lang.Thread.State枚举中定义六种：
+NEW(new Thread(r)) RUNNABLE(start就绪/run正在运行/操作系统层面的阻塞例如BIO阻塞)
+BLOCK(等待synchronized的monitor阻塞) WAITING(Object.wait()/join()/LockSupport.park()等待)
+TIME_WAITING(sleep(n)/join(n)/wait(n)/LockSupport.parkUntil(n)超时等待) TERMINATED(终止)
+
+Thread.sleep(millis)  InterruptedException 写法：Thread.sleep(1*1000);TimeUnit.SECONDS.sleep(1);
+
+Thread.yield() 向调度程序提示当前线程愿意让出当前使用的处理器。调度程序可以随意忽略此提示
+
+Thread#interrupt()
+如果被打断的线程处于sleep(#)/join(#)/wait(#)状态，则isInterrupted被清除为false，并抛出InterruptedException。
+如果被打断的线程处于正常执行，则则isInterrupted被标记为true
+Thread#isInterrupted() 获取打断标记，不会清除打断标记，Thread.interrupted() static方法，获取打断标记并清除标记。
+
+在线程A中优雅地终止线程B，使用interrupt()设置打断标记，线程循环地检测是否设置了打断标记
+//使用volatile变量存储是否停止运行，在线程B中的执行中循环判断该变量是否满足退出的条件，如果线程中使用了Thread.sleep(#)，可以再调用interrupt打断。
+B{
+    Thread t;
+    volatile boolean stop = false;
+
+    public void start(){
+        t = new Thread(()->{
+            Thread currentThread = Thread.currentThread();
+            while(!stop){
+                //业务代码
+
+                //线程可能需要等一段时间再执行
+                try{
+                    TimeUnit.SECOND.sleep(10);
+                } catch(InterruptedException  e){
+
+                }
+
+            }
+        },"Thread_B");
+        t.start();
+    }
+    public void stop(){
+        stop = true;
+        t.interrupt();
+    }
+}
+
+
+LockSupport.park()/parkUntil(ms)/parkNanos(nanos)
+如果许可证可用，则消耗并直接返回；否则阻塞当前线程，如果当前线程占有锁，不会释放当前占用的锁，直至许可证可用。
+解除阻塞的条件：当使用LockSupport.unpark(Thread)/或者Thread.interrupt()/经过指定的等待时间/无故调用返回
+实现使用了Unsafe#park(boolean,long)方法：
+sun.misc.Unsafe#park(boolean,long)：第一个参数true则第二个参数单位为ms，第一个参数false则第二个参数单位为ns。
+UNSAFE对象的获取：
+//Unsafe unsafe = Unsafe.getUnsafe(); //throwed java.lang.SecurityException: Unsafe
+//getDeclaredField获取所有的字段 getField获取public的字段
+Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
+theUnsafe.setAccessible(true);
+Unsafe unsafe =(Unsafe) theUnsafe.get(null);
+
+
+LockSupport.unpark(Thread)
+如果指定线程的许可证不可用，则使它可用；此时，如果该线程因调用park方法阻塞则unblock。
+否则，保证线程的下一次调用park不会被阻塞。
+
+
+
+Object#notify()
+随机唤醒一个等待当前对象的监视器monitor的线程
+notifyAll()
+全部唤醒一个等待当前对象的监视器monitor的线程
+Object#wait()/wait(millis)/wait(millis,nanos)
+使得当前线程进入等待状态，直至obj.notify()/notifyAll()或者经过指定超时时间后才可能被唤醒
+
+notify()/notifyAll()/wait(#)：
+只能由被拥有当前对象的monitor的线程调用，否则抛出IllegalMonitorStateException
+Object o = new Object();
+synchronized(o){
+	o.wait();/o.notify();
+}
+
+当线程调用方法obj.wait()后，该线程(状态变成WAITING/TIME_WAITING)进入obj的monitor的Wait Set等待池中，直至其他线程调用obj.notifyAll()/notify()，obj的
+等待池中的线程会被wake up全部/随机一个被移出，进入Entry List锁池，尝试抢占obj的monitor，如果成功获取则从锁池中移除。
+
+
+
+
+Java对象的内存布局：对象头Header、实例数据Instance data、对齐填充Padding
+对象头Mark Word,Class Metadata Address,Array Length(如果是是数组对象的话)
+Mark Word: 32bit/64bit
+Class Metadata Address: 32bit/64bit
+Array Length: 32bit
+
+Mark word :state
+hashcode|age|biased_lock:0       |01 : normal
+threadID|epoch|age|biased_lock:1 |01 : Biased
+ptr_to_record                    |00 : lightweight locked
+ptr_to_heavyweight_monitor       |10 : heavyweight locked
+                                 |11 marked for gc
+
+monitor:synchronized重量级锁使用 当升级为重量级锁时，mark word保存着指向monitor的指针，
+而monitor则维护着waitSet(等待池，集合)/entryList(锁池，链表)/owner(当前所有者)/mark word(Object header中原来的mark word等信息)等
+流程：刚开始Monitor的Owner为null，当线程执行synchronized代码时，会将owner指向当前线程，而后的线程就会进入EntryList中Block，
+当owner线程执行完同步代码块，便会通知monitor唤醒EntryList中的线程来竞争锁。如果成功竞争到锁的线程则owner指向该线程，竞争锁失败的线程重新回到EntryList中。
+当线程执行完同步代码块时，使用monitor中的存储的mark word信息进行重置锁对象的mark word。
+
+Lock Record:锁记录，轻量级锁使用，此时每个线程都会维护着保存Lock Record信息的栈
+Lock Record维护着 Object Reference(即synchronized括号的对象/同步方法的Class对象的引用)/ mark word(Object header中的信息)
+流程：执行到synchronized代码块时，加锁，让锁记录的Object Reference指向锁对象，并尝试CAS替换Object的Mark word为当前的锁记录的地址。如果CAS替换成功，则将Object的mark word保存到锁记录中。
+此时，锁对象的mark word中存储着当前的锁记录的地址，表示该线程持有锁。如果CAS失败，有两种情况：
+如果是其他线程持有该对象的锁，则进入锁膨胀过程；
+如果是自己所在线程占用锁，则表示锁重入，将当前栈帧的锁记录的mark word置为null，并添加当前的锁记录到Lock Record栈中，markword=null可作为重入计数的标识
+当退出synchronized，解锁，如果锁记录的mark word为null，则表示锁重入，将重入计数减一，
+如果不为null，则CAS重置锁对象的mark word，如果成功则使用锁记录中的mark word信息重置Object的mark word，如果失败则进入重量级锁的解锁过程。
+
+轻量级锁-》重量级锁的锁膨胀过程
+当线程A对锁对象Object添加了轻量级锁，这时线程B进行CAS更新锁对象的mark word为自己的锁记录失败时，进入锁膨胀过程：
+线程B为锁对象申请Monitor，让Object的mark word 指向monitor的地址，然后owner指向线程A，线程B进入EntryList中，进行Block。
+
+
+偏向锁
+如果开启了偏向锁(默认开启)，那么对象创建时，mark word的后三位bit为101，此时threadId/epoch/age都为0
+偏向锁是延迟生效的，可以通过添加VM参数：-XX:BiasedLockingStartupDelay=0来禁用延迟
+可以通过添加VM参数：-XX: -UseBiasedLocking来禁用偏向锁
+如果没有开启偏向锁，那么对象创建时，mark word的后三位bit为001，此时hashcode/age都为0，第一次用到hashcode时才会赋值。
+处于偏向锁的对象解锁后，对象头仍存储着ThreadId，而不会重置为normal状态的mark word值
+当其他线程使用偏向锁的锁对象时，会撤销偏向锁，进行锁升级-》轻量级锁。
+批量重偏向：当偏向锁被撤销后，升级为轻量级锁，但没有锁竞争，由另外的单一线程重复访问，当偏向锁被撤销次数阈值超过20次后，可能会进行重偏向到另一个线程。
+批量撤销：当偏向锁被撤销次数阈值超过40次后，当前锁对象的整个类的实例对象(包括新建的对象)都是不可偏向的。
+
+进入偏向锁状态时，无法保存31位bit的hashcode，因此调用hashcode()方法时会撤销偏向锁，而在轻量级锁的锁记录/重量级锁的monitor中都存储着锁对象的mark word(hashcode)。
+偏向锁：存在少量线程，锁对象由单一线程持有；轻量级锁：锁对象由多个线程先后持有；重量级锁：锁对象由多个线程交替持有。
+
+自适应自旋的优化
+获取monitor失败后进行自旋重试，在经过若干次重试失败后才进入monitor的entryList中阻塞。
+
+锁粗化/锁消除
+使用JIT即时编译器对字节码进行分析与优化
+可以通过添加VM参数：-XX:-EliminateLocks禁用锁消除
+
+
+同步方法：在方法访问识别符flags中增加ACC_SYNCHRONIZED
+进入同步代码块monitorEntry,如果同步代码块执行过程中抛出异常，也会monitorExit。
+
+
+wait/notify原理
+当线程调用wait()时，使用到monitor即重量级锁(进行锁膨胀过程后)，当前线程进入monitor的WaitSet中等待，当前线程变成WAITING/TIME_WAITING状态，
+当其他线程调用notify()/notifyAll()方法后，会唤醒WaitSet中的线程，从WAITING-》wake up，进入EntryList后重新竞争。
+处于WaitSet中(即WAITING状态)和EntryList(即BLOCKED)状态的线程不会占用CPU时间片，调度器不会考虑这些线程。
+
+wait/sleep的区别联系
+sleep是Thread的static方法，wait是Object的普通方法。
+wait必须和synchronized搭配使用，(IllegalMonitorStateException)，而sleep则不需要。
+sleep不会释放当前线程占用的锁，而wait则是释放当前线程占用的锁。
+sleep(#)和wait(#)都会使线程进入TIME_WAITING状态。
+
+
+死锁：线程需要获取多个锁，而多个运行的线程互相抢占线程的锁，造成多个线程无法获得锁而阻塞
+活锁：多个运行的线程相互破坏线程结束的条件，造成多个线程无法结束
+饥饿：由于某线程的优先度较低或者在多个线程随机竞争锁的过程中一直分配不到CPU时间片而造成线程无法运行
+
+
+ReentrantLock和synchronized的区别
+相同点：两者都是可重入锁。
+尝试获取锁但获取不到时的阻塞是否可中断：
+前者是可被动地中断的(通过lockInterruptibly()/tryLock(timeout,TimeUnit)方法获取锁,通过Thead的普通方法interrupt()方法打断)后者是不可中断的(BLOCKED线程进入Monitor的EntryList中)
+前者可以主动地中断：(锁超时：tryLock()/tryLock(timeout,TimeUnit) 根据返回的boolean可以判断在指定时间内是否获得锁)
+是否支持公平锁：前者支持公平锁(设置为公平锁，先到先得，会降低并发度)，后者不支持。
+条件变量：前者可通过newCondition()获取多个条件变量，而后者Object Monitor中有WaitSet属性，只能维护一个条件变量。
+
+调用await()/signal() 和wait()/notify()同样需要先获取对应的锁，否则抛出IllegalMonitorStateException
+
+ReentrantLock基本用法：
+
+ReentrantLock lock = new ReentrantLock();
+//创建条件变量,如果需要用到的话
+Condition condition = lock.newCondition();
+lock.lock();
+try{
+    //业务代码 //或者condition.await()/signal()/signalAll()
+}finally{
+    lock.unlock();
+}
+
+原子性/可见性/有序性
+
+volatile：可见性/有序性
+synchronized:原子性/可见性
+
+
+原子操作：不可中断的一个或一系列操作。Java中可以通过锁和CAS实现原子操作。
+
+结合CAS+volatile可以实现无锁并发，适用于线程数较少、多核CPU的场景中。(CAS自旋的线程虽然不会进入阻塞状态，但仍会由于分配不到时间片而导致上下文切换。)
+
+
+
+AtomicStampedReference(里面版本号用的是int stamp变量)/AtomicMarkableReference(里面版本号用的是boolean mark变量)
+AtomicStampedReference：
+public boolean compareAndSet(V   expectedReference,
+                                 V   newReference,
+                                 int expectedStamp,
+                                 int newStamp) {
+    Pair<V> current = pair;
+    return
+        expectedReference == current.reference &&
+        expectedStamp == current.stamp &&
+        ((newReference == current.reference &&
+          newStamp == current.stamp) ||
+         casPair(current, Pair.of(newReference, newStamp)));
+}
+
+AtomicIntegerArray/AtomicLongArray/AtomicReferenceArray：原子数组类
+
+
+AtomicIntegerFieldUpdater/AtomicLongFieldUpdater/AtomicReferenceFieldUpdater:原子字段更新器(对于字段的数据类型选择对应的字段更新器类)
+需要通过调用静态方法AtomicReferenceFieldUpdater<U,W> newUpdater(Class<U> tclass,Class<W> vclass,String fieldName)获取
+注意：修改字段必须加上volatile关键字修饰。：@throws IllegalArgumentException if the field is not volatile
+
+
+DoubleAdder/LongAddr:累加器
+性能比AtomicLong提升，基本原理就是：在有竞争时，设置多个累加单元Cell，不同的线程累加不同的Cell，最后将结果汇总。通过设置多个累加单元，使得多个线程CAS时减少重试次数。
+
+CAS实现原子操作的三个问题：
+1.ABA问题：解决思路是使用版本号，更新时compareAndSet需要指定expectedValue,expectedVersion，newValue,newVersion四个值，首先检查expectedValue是否等于currentValue，并且检查expectedVersion是否等于currentVersion,如果全部相等，则使用newValue更新值和newVersion更新版本号。
+AtomicStampedReference(里面版本号用的是int stamp变量)/AtomicMarkableReference(里面版本号用的是boolean mark变量)
+2.自旋时间长开销大
+3.只能保证一个共享变量的原子操作：解决思路是将多个共享变量合并为一个共享变量。AtomicReference类。
+
+Java内存模型
+在Java中，所有的实例域、静态域和数组元素都存储在堆内存中，堆内存在线程中共享。
+JMM定义了线程与主内存之间的抽象关系：线程之间的共享变量存储在主内存中，每个线程有自己的本地内存，本地内存中存储了该线程用于读写共享变量的副本。

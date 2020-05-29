@@ -1,0 +1,25 @@
+server:
+  port: 8005
+  servlet:
+    context-path: /order
+spring:
+  cloud:
+    config:
+      label: master
+      discovery:
+        enabled: true
+        service-id: config-server
+      profile: dev
+  #      uri: http://localhost:8666
+  application:
+    name: order-service
+
+
+
+eureka:
+  instance:
+    prefer-ip-address: true
+    instance-id: order-service:8005
+  client:
+    serviceUrl:
+      defaultZone: http://eureka1:8761/eureka/

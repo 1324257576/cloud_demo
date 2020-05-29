@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<configuration>
+    <property name="pattern" value="[%-5level]%d{HH:mm:ss.SSS} %c %M %L [%thread] %m%n"></property>
+    <property name="log_dir" value="${user.dir}"></property>
+    <!--日志输出格式
+
+    %-5level 级别占五个字符左对齐
+    %d{yyyy-MM-dd HH:mm:ss.SSS}日期
+    %c 类全限定类名
+    %M 方法名
+    %L 行号
+    %thread 线程名称
+    %m %msg 字符串信息
+    %n 换行
+    -->
+    <appender name="console" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.out</target>
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>${pattern}</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="file" class="ch.qos.logback.core.FileAppender">
+        <file>${log_dir}/log/u0-log</file>
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>${pattern}</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="roll" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${log_dir}/log/u0-roll_log</file>
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>${pattern}</pattern>
+        </encoder>
+
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${log_dir}/log/roll.%d{yyyy-MM-dd}.log%i.gz</fileNamePattern>
+            <maxFileSize>1GB</maxFileSize>
+        </rollingPolicy>
+    </appender>
+
+    <root level="ALL">
+        <appender-ref ref="console"/>
+        <!--<appender-ref ref="roll"/>-->
+    </root>
+</configuration>
